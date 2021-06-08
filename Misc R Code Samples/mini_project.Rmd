@@ -1,0 +1,388 @@
+---
+title: 95-868 Mini project 
+author: Satvika Neti
+output: 
+  html_document:
+    fig_width: 7
+    fig_height: 5
+---
+
+#### Instructions 
+
+Submit this Rmd file and the HTML output on canvas.
+
+Code should be clearly commented. Plots should be presentable and properly labeled. You can change the figure sizes to make them larger if you wish. Mitigate overplotting whenever possible.
+
+#### Preliminaries
+
+We'll use the data file `project_data.rda`, which should be in the same directory as this markdown file (which should also be your working directory). It contains 4 data frames: 
+
+
+1. `crime.subset`: a data set of crimes committed in Houston 2010. This is taken from lecture 6. 
+2. `movie.genre.data`: Contains the release year, title, genre, budget, and gross earnings for 4998 movies. This data set was constructed by combining financial information listed at `http://www.the-numbers.com/movie/budgets/all` with IMDB genre information from `ftp://ftp.fu-berlin.de/pub/misc/movies/database/genres.list.gz`. Note that if a movie belongs to multiple genres, then it is listed multiple times in the data set.
+3. `movie.data`: These are the same movies as `movie.genre.data`, but without any genre information, and each movie is listed only once. 
+4. `expenditures`: a data set of household demographics and spending amounts (per 3 months) in different expenditure categories. 
+
+```{r}
+load('project_data.rda')
+set.seed(1)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(splines)
+library(boot)
+library(broom)
+library(knitr)
+
+# I discussed some of this homework with Kayla Reiman. 
+
+```
+
+#### Part 1: Finding Outliers in Crime
+
+In Lecture 6, we counted the number of crimes occuring each week in each block, and we looked for counts which were abnormally high. To do this, we computed p-values under the hypothesis that the number of crimes was poisson distributed for each block and each week, where the poisson parameter lambda varied by block (and equaled the average rate for that block.)
+
+Here we will repeat this exercise, but restrict to certain types of crimes. After that, we will look for specific addresses (instead of entire city blocks) and days (instead of weeks) which had unusual crime counts.
+
+**Question 1a.** Count the number of `auto theft` crimes that occur in each block, each week. For each block, compute the average number of auto theft crimes per week. Construct a table showing the 5 block-weeks with the highest number of auto thefts, along with average number occuring per week at each block
+
+Hint 1: to get the average number of crimes per week, divide the total number of crimes by the number of weeks in the data set, which is 35. 
+
+Hint 2: your table should have 4 columns: the block, the week, the number of auto thefts that block-week, and the average number of auto thefts per week for that block.
+
+```{r}
+
+#find number of weeks (35)
+num.weeks <- max(crime.subset$week)
+
+#create dataset to get number by block week, arrange by number of thefts
+autotheftperweek <- crime.subset %>%
+                    filter(offense == "auto theft") %>%
+                    group_by(block, week) %>%
+                    summarise(num.auto.theft = n()) %>%
+                    arrange(desc(num.auto.theft))
+
+#create dataset to get avg by block for all weeks 
+avgautotheftperbloack <- crime.subset %>%
+                        filter(offense == "auto theft") %>%
+                        group_by(block) %>%
+                        summarise(avg.auto.theft = n()/num.weeks)
+
+#join and show top 5
+table1a <- left_join(autotheftperweek, avgautotheftperbloack, by = "block")
+
+kable(table1a[1:5, ])
+
+```
+
+
+**Question 1b.** For each block-week, compute a p-value for its auto theft count. For the null hypothesis required by our p-values, we will assume that the number of auto thefts in each block-week is a Poisson random variable, with expectation (the parameter lambda) equal to its weekly average computed in Question 1a. (This is the same as in the lecture.) We will consider a block-week to be anomalous if its p-value is lower than a Bonferoni-corrected false detection rate of 5%. How many anomalous block-weeks did you find? For the anomalous block-weeks (if there are any), did the crimes tend to occur at the same address? 
+
+```{r}
+# Your code here
+
+#code from lecture to find p values 
+pval <- 0 
+for (i in 1:nrow(table1a)) {
+  pval[i] = poisson.test(table1a$num.auto.theft[i], r = table1a$avg.auto.theft[i], alternative = "greater")$p.value
+}
+
+table1a$pval <- pval
+
+#use bonefori cutoff and filter table 
+cutoff <- 0.05/nrow(table1a)
+table1a <- filter(table1a, pval <= cutoff)
+
+kable(table1a)
+
+```
+
+ANS: (How many anomalous block-weeks did you find? If you found any, did they tend to occur at the same address?)
+
+I didn't find any block weeks that were anomalous with the cutoff. 
+
+**Question 1c.** Find the daily counts of auto thefts occuring at each unique address. For each address in your data set, also compute the average number of auto thefts occuring per day. Construct a table showing the 5 address-dates with the highest number of auto thefts, along with the average number occuring per day at those addresses:  
+
+(This is analogous to Question 1a, except that you are grouping by address and date, instead of block and week. For the average number of auto thefts per day, you will want to divide the total number of auto thefts by 243, the number of days in the data set) 
+
+```{r}
+#find number of days in dataset 
+num.days <- length(unique(crime.subset$date))
+
+#create dataset to get number of thefts by address/date, sort
+autotheftperday <- crime.subset %>%
+                    filter(offense == "auto theft") %>%
+                    group_by(address, date) %>%
+                    summarise(num.auto.theft = n()) %>%
+                    arrange(desc(num.auto.theft))
+
+#get dataset of avg thefts per address over all days 
+avgautotheftperaddress <- crime.subset %>%
+                        filter(offense == "auto theft") %>%
+                        group_by(address) %>%
+                        summarise(avg.auto.theft = n()/num.days)
+
+#merge and show top 5
+table1c <- left_join(autotheftperday, avgautotheftperaddress, by = "address")
+
+kable(table1c[1:5, ])
+
+```
+
+**Question 1d.** For each address-date, compute a p-value for its auto theft count, where the null hypothesis is that the number of auto thefts is a Poisson random variable, with expectation (the parameter lambda) equal to the daily average that you computed in question 1c. (Again, this is the same as in the lecture). We will consider an address-date to be anomalous if its p-value is smaller than a Bonferoni-corrected false detection rate of 5%. How many address-dates were anomalous? For the anomalous address-dates, how many auto thefts occurred? What was the `location` for these anomalous addresses? 
+
+(Note: `location` is a column in the original `crime.subset` data frame)
+
+```{r}
+
+#same code as before to find p values 
+pval <- 0 
+for (i in 1:nrow(table1c)) {
+  pval[i] = poisson.test(table1c$num.auto.theft[i], r = table1c$avg.auto.theft[i], alternative = "greater")$p.value
+}
+
+table1c$pval <- pval
+
+#use bonefori cutoff to filter and show
+cutoff <- 0.05/nrow(table1c)
+table1c.filt <- filter(table1c, pval <= cutoff)
+
+kable(table1c.filt)
+
+#merge with full dataset to find locations
+loc.table1c.filt <- left_join(table1c.filt, crime.subset, by= c("address"= "address", "date" = "date"))
+
+```
+
+ANS: (How many address-dates were anomalous? If you found any, how many auto thefts occurred at these address-dates? What was their type of `location`?)
+
+I found 2 address-dates taht were anomalous - they both had 3 thefts occur, and one was in an apartment parking lot, and the other was in a commercial parking lot/garage.
+
+**Question 1e.** The highest number of auto thefts occuring at any address in a single day was 3. This happened on 3 separate occurrences: `2550 broadway st` on `4/16`, `3850 norfolk` on `6/13/2010`, and `2650 south lp w` on `3/23`. Were all 3 occurences included as anomalous in your previous analysis? If so, why do you think were they included? If not, why do you think some were included, but others not?
+
+ANS: (Which of the above 3 address-dates were included as anomalous, if any? Why/why not?)
+
+The 2550 broadway address and the 3850 norway address were included, but 2650 south wasn't - the average for 2650 was much higher so that could be why it wasn't included - the particular address date was high, but not out of the norm for that particular address over all the days. 
+
+
+#### Part 2: What time do most crimes occur?
+
+In the `crimes.subset` data frame, there are the following columns
+
+1. `offense`: the type of crime -- theft, auto theft, burglary, and robbery
+2. `hour`: the hour that the crime occurred -- 0 (midnight) to 23 (11 PM)
+3. `month`: the month that the crime occurred. We have grouped the month into two categories: `jan-apr`, and `may-aug`
+
+**Question 2a** Make a scatterplot (or line plot) showing the percentage of crimes committed each hour. (See hint PDF for an example)
+
+```{r}
+# Your code here
+
+#create dataset grouped by hour
+byhourper <- crime.subset %>%
+            group_by(hour) %>%
+            summarise(percent = n()/nrow(crime.subset))
+
+#plot as a line graph 
+ggplot(data = byhourper, aes(x=hour, y=percent)) + geom_line(aes(group=1)) + geom_point()
+
+```
+
+**Question 2b** Repeat the plot in Question 3a, but separately for each type of `offense`: `auto theft`, `burglary`, `robbery`, and `theft`. So you should have 4 plots (or 4 facets). In your each of your plots,  
+include a reference curve using the pooled data, in order to facilitate comparisons between the different offences. (Hint: you computed this reference curve in question 2a). Do the different types of crimes have different distributions for their time of occurence? How do they differ? 
+
+```{r}
+# Your code here
+
+#create dataset for offense numbers
+byoffense <- crime.subset %>%
+              group_by(offense) %>%
+            summarise(countbyoffense = n())
+
+#create dataset for offense by hour numbers
+byhourpercrime <- crime.subset %>%
+                  group_by(offense, hour) %>%
+                  summarise(countbyoffensehour = n())
+
+#merge datasets and calculate percent over number of total in that offense 
+byoffensehour <- left_join(byhourpercrime, byoffense, by = "offense")
+byoffensehour$percent <- byoffensehour$countbyoffensehour / byoffensehour$countbyoffense
+
+#plot both lines on same graph, facetting by offense 
+ggplot() + geom_line(data = byhourper, aes(x=hour, y=percent, group = 1), color = "grey") + geom_line(data = byoffensehour, aes(x=hour, y=percent, color = offense, group = offense)) + facet_wrap(~offense)
+
+```
+
+ANS: (How does the distribution the time of occurence differ for each type of crime?)
+
+Burglary tends to happen a lot more right in the wee hours of the morning, while a lot of the other types of crime (auto theft, robbery) tends to happen mostly at night, before midnight. 
+
+NOTE: you may find it interesting to look up the differences between burglary, robbery, and theft, in order to understand why they may have different distributions for their time of occurence. (my first google hit for "burglary robbery and theft" is https://www.criminaldefenselawyer.com/resources/criminal-defense/criminal-offense/differences-between-theft-burglary-robbery)
+
+
+
+**Question 2c** Suppose that for each type of `offense`, we would like to know if the distribution of occurence times is different in the colder months `jan-apr` vs the warmer months `may-aug`. (For example, perhaps the percentage of crimes late at night is higher when the weather is warm.) Note that we are not asking whether the total number of crimes is higher during warmer months, but rather if their distribution of occurence times is different.
+
+To answer this question, make plots which are similar to Question 3b, but divide the data also by the `month` column in the data. (you can plot each `month` as a different color). 
+
+Note: You don't have to analyze the plot yet -- wait for part 2f
+
+```{r}
+
+#create dataset for offense and month counts
+byoffensemonth <- crime.subset %>%
+                  group_by(offense, month) %>%
+                  summarise(countbyoffensemonth = n())
+
+#same thing but add hours
+byoffensemonthhour <- crime.subset %>%
+                  group_by(offense, month, hour) %>%
+                  summarise(countbyoffensemonthhour = n())
+
+#merge together and calculate percentage
+bymonthhour <- left_join(byoffensemonthhour, byoffensemonth, by = c("offense", "month"))
+bymonthhour$percent = bymonthhour$countbyoffensemonthhour / bymonthhour$countbyoffensemonth 
+
+#plot with reference line 
+ggplot() + geom_line(data = byhourper, aes(x=hour, y=percent, group = 1), color = "grey") + geom_line(data = bymonthhour, aes(x=hour, y=percent, color = month, group = month)) + facet_grid(offense~month)
+
+```
+
+**Question 2d** As an alternative, create a QQ plot comparing the distribution `hour` for auto theft crimes occuring in `jan-apr` vs `may-aug`. (reminder: `hour` is a column in the data set). Include the reference line `y=x`, as this is standard practice for QQ plots. Repeat this for the other 3 types of offense. You may use base graphics if you wish. 
+
+```{r}
+# Your code here
+
+#create qqplot for auto theft
+with(crime.subset[crime.subset$offense == "auto theft", ],
+qqplot(x = hour[month == "jan-apr"], y = hour[month == "may-aug"]))
+abline(a=0,b=1)
+
+#create qqplot for theft
+with(crime.subset[crime.subset$offense == "theft", ],
+qqplot(x = hour[month == "jan-apr"], y = hour[month == "may-aug"]))
+abline(a=0,b=1)
+
+#create qqplot for burglary
+with(crime.subset[crime.subset$offense == "burglary", ],
+qqplot(x = hour[month == "jan-apr"], y = hour[month == "may-aug"]))
+abline(a=0,b=1)
+
+#create qqplot for robbery 
+with(crime.subset[crime.subset$offense == "robbery", ],
+qqplot(x = hour[month == "jan-apr"], y = hour[month == "may-aug"]))
+abline(a=0,b=1)
+
+```
+
+**Question 2e** Based on the plots you created, which crimes have the same distribution by `hour` for each `month`? Which crimes have different distributions of `hour` for each `month`? How do they differ? (answer separately for each crime type)
+
+ANS: (How does distribution of time of occurrence vary (or not vary) by month? Answer separately for each type of offense)
+
+Robbery is the most different, with more crimes happening before 5am in the warm months than the cold months. Auto theft is also a little bit different, with fewer auto thefts happening in the warm months, but the two categories stay relatively the same over the year. 
+
+#### Question 3: Interactions between income and population density on expenditures 
+
+**Question 3a** The `expenditures` dataframe contains two columns, `transportation.trans` and `housing.trans`, that are transformed versions of `transportation` and `housing`. However, the exact form of the transformation is unknown. It may have been a log transformation, or it may have been a power transformation of some type. Your supervisor gives you the following four possibilities to investigate:
+
+1. log transform
+2. power transform with exponent `1/2`
+3. power transform with exponent `1/3`
+4. power transform with exponent `1/4`
+
+Can you figure which transform was used to create `transportation.trans` and `housing.trans` from the original columns, `transportation` and `housing`? Create 1-2 plots which will quickly convince your supervisor that you have found the right choice of transform.
+
+```{r}
+#create qqplot for transportation.trans and transportation transformed by the 1/2 power
+with(expenditures, 
+     qqplot(x=(transportation)^(1/2), y=transportation.trans))
+abline(a=0,b=1)
+
+#do the same with housing
+with(expenditures, 
+     qqplot(x=(housing)^(1/2), y=housing.trans))
+abline(a=0,b=1)
+
+#i tried all of the other transformations too, just to see if they worked, but 1/2 was the one that worked the best so I'm posting these and deleting the others
+
+```
+
+ANS: (what kind of transform was used?)
+
+A power transform with exponent `1/2` was used. 
+
+
+**Question 3b.** The hints PDF contains cross-validation scores for fitting a spline to the formula `transportation.trans ~ ns(income.rank, df = DF)`, where `DF` can range from 1 to 9. Based on this plot, what value for the `df` parameter would you choose?
+
+Similarly, the same PDF contains  cross-validation scores for `housing.trans ~ ns(income.rank, df = DF)`. What value for `df` would you choose here?
+
+ANS: (what value of `df` would you choose for `transportation.trans`? How about `housing.trans`?)
+
+For transportation.trans, I would like use 1 or 2, depending on further tests. I want to keep the model simple, but 1 df might be too simple if we see on a next iteration that it's closer to the cv score of df=2. Given no other information, I think I would lean toward 2 just based on the information that 1 might be too simple - I wouldn't want to go further than that, though.
+
+For housing.trans, I would like choose 4. Until 4 there is a sharp decline in cv score. Between 4 and 5, the decline is much more shallow, and it keeps going down after that at a sharp rate. But in order to keep the model simple and not get into overfitting (which is likely what's happening after 5) I would stick with for 4 or 5, given further testing. Again, given no other information, I would lean toward 4 to keep the model simple and because the difference between 4 and 5 seems slight. 
+
+
+
+**Question 3c** Does the relationship between `transportation.trans` and `income.rank` depend on `population.size`? (If so, we would call this an interaction.) How about `housing.trans` and `income.rank`? If both have interactions, for which one is the interaction stronger or more visually obvious? For this choice, describe the nature of the interaction.
+
+Create two plots to justify your answer. One plot to justify your answer for `transportation.trans`, and another to justify your answer for `housing.trans`. (Note: each plot can have multiple facets).
+  
+Note 1: You do not need to use cross-validation to fit any trend lines -- you can just use `geom_smooth()` with no additional arguments, as this automatically does model selection. 
+
+Note 2: You shouldn't need to use the function `coplot`, since the grouping variable `population.size` is categorical.
+
+```{r}
+#create plots for trans and housing transformed with population size as a facet
+
+ggplot(data = expenditures, aes(x=income.rank, y=transportation.trans)) + geom_point() + geom_smooth() + facet_wrap(~population.size)
+
+ggplot(data = expenditures, aes(x=income.rank, y=housing.trans)) + geom_point() + geom_smooth() + facet_wrap(~population.size)
+
+```
+
+ANS: (Which outcome variable has the interaction -- `housing.trans` or `transportation.trans`? How would you describe the nature of this interaction?)
+
+Housing.trans seems very likely to have an interaction with population size for income rank. For transportation.trans, the reference line stayed relatively the same, with the slope unchanging. Whereas for housing.trans, the slope changed as population.size changed. And because we're seeing all of the groups side by side, it's likely not a case of looking at the same curve in different places, either. As population size increase, the relationship between income.rank and housing.trans gets more extreme at the tails (much steeper in either direction), and a little bit more complicated in the middle income ranks. This tracks with what we know about cities like San Francisco, with a huge population and a high homeless population and a large percent of rich home owners as well. 
+
+#### Question 4: Create your own plot
+
+**Question 4.** Using either `movie.data` or `movie.genre.data`, create a plot showing something interesting about the data. Then discuss what the plot shows, and what the viewer should look when examining the plot. Be sure to label all axes, add a title, adjust for overplotting, etc..., so that it is clear what the plot is trying to show. 
+
+What do we mean by "interesting?" For this type of question, the best type of plot will depend greatly on the intended audience. Sometimes, the audience will not be familiar with the data, or might not have seen the less common types of plots in this course. In those cases, a simple plot might be best. However, this is not one of those cases -- for this question, your audience is the course instructor. You should assume that this person is familiar with the types of plots that we have covered in class, and is also familiar with the data set, and has already seen basic summaries of the data. (A similar discussion is contained in the hint PDF for this question)
+
+Note: The plot should be one of the types that we discussed in class. Facets of course are allowed 
+
+```{r}
+#filter out certain genres <10 data points, >0 domestic gross, and after year 1990
+movie.filt <- filter(movie.genre.data, Genre != "Film-Noir", Genre != "Game-Show", Genre != "News", Genre != "Talk-Show", Genre != "Reality-TV", Domestic.Gross > 0, Release.Year >=1990)
+
+#plot without transform
+ggplot(data = movie.filt, aes(x=Production.Budget, y=Domestic.Gross)) + geom_point() + geom_smooth() + facet_wrap(~Genre)
+
+#plot with transform 
+ggplot(data = movie.filt, aes(x=log(Production.Budget), y=log(Domestic.Gross))) + geom_point() + geom_smooth() + facet_wrap(~Genre)
+
+```
+
+```{r}
+
+#cut years into 5 breaks and pick 7 specific genres to look at further 
+movie.filt$yearcat <- cut(movie.filt$Release.Year, breaks = 5)
+movie.filt2 <- filter(movie.filt, Genre %in% c("Action", "Adventure", "Comedy", "Drama", "Romance", "Thriller", "Western"))
+
+#plot over facet grid
+ggplot(data = movie.filt2, aes(x=log(Production.Budget), y=log(Domestic.Gross))) + geom_point() + geom_smooth() + facet_grid(Genre~yearcat)
+
+```
+
+
+(add your discussion of the plot here. Note that the discussion does not need to be extremely long. In fact, if you find that your discussion is too long, it may suggest that the plot is unclear)
+
+I was really interested in the connection between production budget and gross domestic income. Was there always a linear relationship between the two? Especially across genres? 
+
+First, I plotted just the raw number with a genre facet, and saw that I needed to delete a lot of genres that didn't have enough points to be geom smoothed. I also decided to filter out any movies with 0 domestic gross and only look at movies after 1990 to make it more relevant. After looking at the data, I also decided to use a log log transform to look at the data, because the outliers and a lot of traffic in the small production budget/small gross quadrant. 
+
+Once I did that, we can see that the relationship is actually fairly linear (in the log log space) for most of the big genres, but not necessarily for some of the smaller ones. 
+
+I also wanted to see if that trend stayed over time, so I plotted a few of the genres over 5 different 20 year gaps and found that the relationship holds pretty steady over time as well. 
